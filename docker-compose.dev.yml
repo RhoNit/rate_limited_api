@@ -1,0 +1,46 @@
+# docker-compose.dev.yml — external dependencies only.
+#
+# Use this when you want to run the API locally with `go run` (or your
+# IDE debugger) but still want real MySQL and RabbitMQ rather than the
+# in-memory backend.
+#
+# Usage:
+#   make dev-up        # start MySQL + RabbitMQ
+#   go run ./cmd/server  (or: make run-mysql / make run-full)
+#   make dev-down      # tear everything down
+#
+# The API is NOT started here; you run it yourself on the host.
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: rootsecret
+      MYSQL_DATABASE: ratelimit
+      MYSQL_USER: app
+      MYSQL_PASSWORD: secret
+    ports:
+      - "3306:3306"   # reachable at localhost:3306
+    volumes:
+      - dev_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uapp", "-psecret"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports:
+      - "5672:5672"     # AMQP — reachable at localhost:5672
+      - "15672:15672"   # Management UI — http://localhost:15672 (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  dev_mysql_data:

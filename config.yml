@@ -1,0 +1,26 @@
+# Rate-Limited API — local configuration
+#
+# Priority: env vars > this file > built-in defaults
+# Set LOG_DEVELOPMENT=true for coloured human-readable logs (default: JSON).
+#
+# ┌─────────────────────────────────────────────────────────┐
+# │ No external deps   → backend: memory  queue.enabled: false  │
+# │ MySQL + RabbitMQ   → backend: mysql   queue.enabled: true   │
+# │   (run: make dev-up first, or use: make compose-up)         │
+# └─────────────────────────────────────────────────────────┘
+
+http:
+  addr: ":8000"
+
+rate_limit:
+  backend: "memory"       # memory | mysql
+  max_requests: 5
+  window_seconds: 60
+
+mysql:
+  dsn: "app:secret@tcp(localhost:3306)/ratelimit"
+  # parseTime=true&loc=UTC is appended automatically if missing.
+
+queue:
+  enabled: false
+  amqp_url: "amqp://guest:guest@localhost:5672/"

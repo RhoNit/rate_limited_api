@@ -247,15 +247,17 @@ The default `config.yml` already has `backend: memory` and
 `queue.enabled: false`. Just:
 
 ```bash
-go run ./cmd/server
-# or
 make run
+# or without make:
+go run ./cmd/server
 ```
 
 #### 2. MySQL + RabbitMQ — start dependencies in Docker, run API on the host (DEV mode)
 
 ```bash
-make dev-up        # starts MySQL (:3306) and RabbitMQ (:5672) in Docker
+make dev-up
+# or without make:
+docker compose -f docker-compose.dev.yml up -d
 ```
 
 Edit `config.yml` (or export env vars):
@@ -272,17 +274,49 @@ Then run the API:
 
 ```bash
 make run-full
-# equivalent to: RATE_LIMIT_BACKEND=mysql QUEUE_ENABLED=true go run ./cmd/server
+# or without make:
+RATE_LIMIT_BACKEND=mysql QUEUE_ENABLED=true go run ./cmd/server
 ```
 
 To stop the dependencies:
 
 ```bash
 make dev-down
+# or without make:
+docker compose -f docker-compose.dev.yml down -v
 ```
 
-> **Tip:** You can also mix and match — `make run-mysql` uses MySQL without
+> **Tip:** You can also mix and match — `make run-mysql` (or
+> `RATE_LIMIT_BACKEND=mysql go run ./cmd/server`) uses MySQL without
 > the queue, keeping `queue.enabled: false` in `config.yml`.
+
+> **Note — how configuration works depending on how you run:**
+>
+> - **`go run` / `make run`** — the app reads directly from `config.yml`.
+>   To toggle the backend or queue, just edit `config.yml`:
+>   ```yaml
+>   rate_limit:
+>     backend: "mysql"    # or "memory"
+>   queue:
+>     enabled: true       # or false
+>   ```
+>
+> - **`docker compose up`** — `config.yml` is baked into the image but the
+>   env vars in `docker-compose.yml` take priority and shadow it. To change
+>   behaviour you have two options:
+>   1. Export the variable in your shell before running:
+>      ```bash
+>      export QUEUE_ENABLED=false
+>      docker compose up -d
+>      ```
+>   2. Edit the value directly in `docker-compose.yml`:
+>      ```yaml
+>      environment:
+>        QUEUE_ENABLED: "false"
+>      ```
+>   Editing `config.yml` alone will have **no effect** when running via
+>   Docker Compose as long as the corresponding env var is set in the
+>   compose file.
 
 ---
 
@@ -294,6 +328,9 @@ overrides the MySQL DSN and RabbitMQ URL to use Docker service hostnames
 
 ```bash
 make compose-up
+# or without make:
+docker compose up --build -d
+
 # API:            http://localhost:8000
 # RabbitMQ UI:    http://localhost:15672  (guest / guest)
 ```
@@ -302,32 +339,123 @@ To stop and remove all containers and volumes:
 
 ```bash
 make compose-down
+# or without make:
+docker compose down -v
 ```
 
 You can override limit or window without touching any file:
 
 ```bash
-RATE_LIMIT_MAX_REQUESTS=10 RATE_LIMIT_WINDOW_SECONDS=30 docker compose up --build
+RATE_LIMIT_MAX_REQUESTS=10 RATE_LIMIT_WINDOW_SECONDS=30 docker compose up --build -d
+```
+
+> **Note:** If `docker compose` (with a space) is not available, install the
+> Compose plugin:
+> ```bash
+> # Amazon Linux / RHEL / CentOS
+> sudo yum install -y docker-compose-plugin
+>
+> # Ubuntu / Debian
+> sudo apt-get install -y docker-compose-plugin
+>
+> # Or install the binary directly (any Linux)
+> DOCKER_CONFIG=${DOCKER_CONFIG:-$HOME/.docker}
+> mkdir -p $DOCKER_CONFIG/cli-plugins
+> curl -SL https://github.com/docker/compose/releases/download/v2.27.1/docker-compose-linux-x86_64 \
+>   -o $DOCKER_CONFIG/cli-plugins/docker-compose
+> chmod +x $DOCKER_CONFIG/cli-plugins/docker-compose
+> ```
+
+---
+
+### Smoke test — hosted instance (`3.109.164.148:8000`)
+
+The API is live. Use these curls to exercise it directly.
+
+#### `POST /request` — queue disabled (returns `429` when limit exceeded)
+
+```bash
+# Send 5 allowed requests
+for i in $(seq 1 5); do
+  echo "--- Request $i ---"
+  curl -s -X POST http://3.109.164.148:8000/request \
+    -H "Content-Type: application/json" \
+    -d '{"user_id":"Ranit","payload":{"x":'$i'}}' | jq '{status,remaining}'
+done
+
+# 6th request — rate limited (429)
+curl -s -X POST http://3.109.164.148:8000/request \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"Ranit","payload":{"x":6}}' | jq .
+```
+
+Expected 6th response:
+```json
+{
+  "error": "rate_limit_exceeded",
+  "message": "limit is 5 per 60s",
+  "retry_after_seconds": 42.8,
+  "reset_at_epoch": 1776806266.064
+}
+```
+
+#### `POST /request` — queue enabled (returns `202` when limit exceeded)
+
+```bash
+# 6th request — queued (202)
+curl -s -X POST http://3.109.164.148:8000/request \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"Ranit","payload":{"x":6}}' | jq .
+```
+
+Expected response:
+```json
+{
+  "status": "queued",
+  "job_id": "a3f1b2c4d5e6f7a8",
+  "user_id": "Ranit",
+  "retry_after_seconds": 42.8
+}
+```
+
+#### `GET /stats` — all users
+
+```bash
+curl -s http://3.109.164.148:8000/stats | jq .
+```
+
+#### `GET /stats` — filter by user
+
+```bash
+curl -s "http://3.109.164.148:8000/stats?user_id=Ranit" | jq .
+```
+
+#### See rate-limit response headers
+
+```bash
+curl -si -X POST http://3.109.164.148:8000/request \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"Ranit","payload":{"x":1}}' \
+  | grep -E "HTTP|X-RateLimit|Retry-After"
 ```
 
 ---
 
-### Smoke test (works for both paths)
+### Smoke test — local instance
 
 ```bash
 # Hit the limit
 for i in $(seq 1 6); do
-  curl -s -w " HTTP %{http_code}\n" -XPOST localhost:8000/request \
-    -H 'content-type: application/json' \
+  curl -s -w " HTTP %{http_code}\n" -X POST http://localhost:8000/request \
+    -H "Content-Type: application/json" \
     -d '{"user_id":"Ranit","payload":{"i":'$i'}}'
 done
 
 # View stats
-curl -s localhost:8000/stats | python3 -m json.tool
+curl -s "http://localhost:8000/stats?user_id=Ranit" | jq .
 ```
 
-Expected: first 5 requests return `200`, the 6th returns `429` (or `202`
-when queue is enabled).
+Expected: first 5 requests return `200`, the 6th returns `429` (queue disabled) or `202` (queue enabled).
 
 ---
 
@@ -337,6 +465,10 @@ when queue is enabled).
 make test        # unit + handler tests
 make test-race   # same, with the race detector (recommended)
 make cover       # HTML coverage report → coverage.html
+
+# without make:
+go test ./...
+go test -race ./...
 ```
 
 ## Design decisions
@@ -434,9 +566,6 @@ mechanical.
    request is double-counted. Adding a `processed_jobs` table with an
    `INSERT IGNORE` on `job_id` before every `CheckAndRecord` call would
    prevent duplicates.
-7. **Cloud deployment.** The service is designed for stateless horizontal
-  scaling (MySQL backend + RabbitMQ). An Azure Container Apps or AWS ECS
-   Fargate deployment manifest would be a natural next step.
 
 ## Project layout
 

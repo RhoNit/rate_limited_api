@@ -25,8 +25,8 @@ services:
       MYSQL_DATABASE: ratelimit
       MYSQL_USER: app
       MYSQL_PASSWORD: secret
-    ports:
-      - "3306:3306"
+    # ports:
+    #   - "3306:3306" # native mysqld already owns port 3306 on the host, so you can remove it. the API still works perfectly because it talks to MySQL over the Docker network, not through the host port.
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:

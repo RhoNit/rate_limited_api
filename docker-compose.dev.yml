@@ -19,8 +19,8 @@ services:
       MYSQL_DATABASE: ratelimit
       MYSQL_USER: app
       MYSQL_PASSWORD: secret
-    ports:
-      - "3306:3306"   # reachable at localhost:3306
+    # ports:
+    #   - "3306:3306"   # reachable at localhost:3306
     volumes:
       - dev_mysql_data:/var/lib/mysql
     healthcheck:
